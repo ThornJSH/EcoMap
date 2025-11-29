@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <base target="_top">
+    <?!= include('styles'); ?>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <div class="left-panel">
+            <!-- 1영역: 입력 영역 -->
+            <div id="input-area" class="card">
+                <header>
+                    <h1>생태도 정보 입력</h1>
+                    <div id="user-info"></div>
+                </header>
+
+                <div class="form-group">
+                    <label for="ecomap-title">생태도 제목</label>
+                    <input type="text" id="ecomap-title" placeholder="예: 우리 가족 생태도">
+                </div>
+
+                <div class="form-group">
+                    <label for="client-name">중심 인물(Client) 이름</label>
+                    <input type="text" id="client-name" placeholder="중심 인물 이름 입력">
+                </div>
+
+                <hr>
+
+                <form id="add-person-form">
+                    <h2>주변 인물/조직 추가</h2>
+                    <div class="form-group">
+                        <label for="person-name">이름</label>
+                        <input type="text" id="person-name" required placeholder="주변 인물 이름">
+                    </div>
+                    <div class="form-group">
+                        <label for="relationship-type">관계</label>
+                        <select id="relationship-type">
+                            <option value="good">좋은 관계</option>
+                            <option value="distant">소원한 관계</option>
+                            <option value="conflict">갈등 관계</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="direction-type">방향 (Client 기준)</label>
+                        <select id="direction-type">
+                            <option value="both">↔ 양방향</option>
+                            <option value="from">→ Client로부터 나감</option>
+                            <option value="to">← Client에게로 들어옴</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn-primary">인물 추가</button>
+                </form>
+            </div>
+
+            <!-- 3영역: 생태도 목록 -->
+            <div id="list-area" class="card">
+                <h2>내 생태도 목록</h2>
+                <div id="ecomap-list-container">
+                    <!-- 목록이 여기에 동적으로 추가됩니다 -->
+                </div>
+                <!-- [수정] 버튼 영역 -->
+                <div style="display: flex; gap: 10px; margin-top: 15px;">
+                    <button id="load-selected-btn" class="btn-primary" style="flex-grow: 1;">선택 항목 불러오기</button>
+                    <button id="delete-selected-btn" class="btn-danger">삭제</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2영역: 캔버스(SVG) 및 제어 버튼 -->
+        <div id="canvas-area" class="card">
+            <!-- [수정] 버튼 추가 및 변경 -->
+            <div class="canvas-controls">
+                <button id="new-ecomap-btn" class="btn-secondary">새로 만들기</button>
+                <button id="save-ecomap-btn" class="btn-primary">시트에 저장</button>
+                <button id="undo-btn" class="btn-secondary">실행 취소</button>
+                <button id="download-jpg-btn" class="btn-secondary">JPG로 저장</button>
+                <button id="download-png-btn" class="btn-secondary">PNG로 저장</button>
+                <span id="save-status"></span>
+            </div>
+            <svg id="ecomap-canvas"></svg>
+        </div>
+    </div>
+
+    <footer class="footer-credit">
+        이 생태도는 Google AI Studio를 활용해, <a href="https://welfareact.net" target="_blank"
+            rel="noopener noreferrer">https://welfareact.net</a>에서 제작하였습니다.
+    </footer>
+
+    <?!= include('script'); ?>
+</body>
+
+</html>

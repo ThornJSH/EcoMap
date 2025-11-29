@@ -1,0 +1,420 @@
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- 글로벌 변수 및 상태 ---
+        const svg = document.getElementById('ecomap-canvas');
+        const svgNS = "http://www.w3.org/2000/svg";
+        const ecomapTitleInput = document.getElementById('ecomap-title');
+        const clientNameInput = document.getElementById('client-name');
+        const saveStatus = document.getElementById('save-status');
+
+        let client = null;
+        let people = [];
+        let history = []; // 실행 취소를 위한 상태 저장 배열
+        let currentEcomapName = '';
+        let isDragging = false;
+        let selectedElement = null;
+        let selectedNodeId = null; // 선택된 노드의 ID를 저장할 변수
+        let offset;
+        const NODE_RADIUS = 40;
+
+        // --- 초기화 ---
+        function initialize() {
+            setupEventListeners();
+            createMarkers();
+            loadUserEmail();
+            loadEcomapList();
+            resetCanvas();
+        }
+
+        function loadUserEmail() {
+            google.script.run.withSuccessHandler(email => {
+                document.getElementById('user-info').textContent = `사용자: ${email}`;
+            }).getUserEmail();
+        }
+
+        function createMarkers() {
+            const defs = document.createElementNS(svgNS, 'defs');
+            const markerEnd = document.createElementNS(svgNS, 'marker');
+            markerEnd.setAttribute('id', 'arrowhead-end');
+            markerEnd.setAttribute('viewBox', '0 -5 10 10');
+            markerEnd.setAttribute('refX', 8); markerEnd.setAttribute('markerWidth', 6); markerEnd.setAttribute('markerHeight', 6); markerEnd.setAttribute('orient', 'auto');
+            const pathEnd = document.createElementNS(svgNS, 'path');
+            pathEnd.setAttribute('d', 'M0,-5L10,0L0,5'); pathEnd.setAttribute('class', 'arrowhead');
+            markerEnd.appendChild(pathEnd);
+            defs.appendChild(markerEnd);
+            const markerStart = document.createElementNS(svgNS, 'marker');
+            markerStart.setAttribute('id', 'arrowhead-start');
+            markerStart.setAttribute('viewBox', '0 -5 10 10');
+            markerStart.setAttribute('refX', 8); markerStart.setAttribute('markerWidth', 6); markerStart.setAttribute('markerHeight', 6); markerStart.setAttribute('orient', 'auto-start-reverse');
+            const pathStart = document.createElementNS(svgNS, 'path');
+            pathStart.setAttribute('d', 'M0,-5L10,0L0,5'); pathStart.setAttribute('class', 'arrowhead');
+            markerStart.appendChild(pathStart);
+            defs.appendChild(markerStart);
+            svg.appendChild(defs);
+        }
+
+        // --- 이벤트 리스너 설정 ---
+        function setupEventListeners() {
+            document.getElementById('add-person-form').addEventListener('submit', handleAddPerson);
+            document.getElementById('undo-btn').addEventListener('click', handleUndo);
+            document.getElementById('download-jpg-btn').addEventListener('click', () => handleDownload('jpeg'));
+            document.getElementById('download-png-btn').addEventListener('click', () => handleDownload('png'));
+
+            document.getElementById('load-selected-btn').addEventListener('click', handleLoadSelected);
+            document.getElementById('delete-selected-btn').addEventListener('click', handleDeleteSelected);
+            document.getElementById('new-ecomap-btn').addEventListener('click', handleNewEcomap);
+            document.getElementById('save-ecomap-btn').addEventListener('click', saveCurrentState);
+
+            clientNameInput.addEventListener('input', (e) => {
+                if (!client) createClient(e.target.value);
+                else client.name = e.target.value;
+                drawEcomap();
+            });
+
+            svg.addEventListener('mousedown', startDrag);
+            svg.addEventListener('mousemove', drag);
+            svg.addEventListener('mouseup', endDrag);
+            svg.addEventListener('mouseleave', endDrag);
+            svg.addEventListener('click', handleSelection);
+
+            document.addEventListener('keydown', handleDeleteKeyPress);
+        }
+
+        // --- 데이터 관리 및 저장 ---
+        function saveStateToHistory() {
+            history.push(JSON.parse(JSON.stringify({ client, people })));
+        }
+
+        function saveCurrentState() {
+            if (!ecomapTitleInput.value) {
+                alert('생태도 제목을 입력해주세요.');
+                ecomapTitleInput.focus();
+                return;
+            }
+            if (!client) {
+                alert('중심 인물(Client)을 입력해주세요.');
+                clientNameInput.focus();
+                return;
+            }
+
+            saveStatus.textContent = '저장 중...';
+            const dataToSave = {
+                ecomapName: ecomapTitleInput.value,
+                client: { ...client, name: clientNameInput.value },
+                people: people
+            };
+            google.script.run
+                .withSuccessHandler((response) => {
+                    saveStatus.textContent = response.message;
+                    currentEcomapName = ecomapTitleInput.value;
+                    loadEcomapList();
+                    setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+                })
+                .withFailureHandler(err => {
+                    saveStatus.textContent = `저장 실패: ${err.message}`;
+                })
+                .saveEcomapData(dataToSave);
+        }
+
+        // --- 핵심 기능 핸들러 ---
+        function handleNewEcomap() {
+            if (confirm('현재 작업 내용을 지우고 새로 시작하시겠습니까? 저장하지 않은 내용은 사라집니다.')) {
+                resetCanvas();
+            }
+        }
+
+        function handleSelection(e) {
+            if (isDragging) return;
+            const targetNode = e.target.closest('.node');
+            if (targetNode) {
+                selectedNodeId = targetNode.id;
+            } else {
+                selectedNodeId = null;
+            }
+            drawEcomap();
+        }
+
+        function handleDeleteKeyPress(e) {
+            if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT') return;
+            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId) {
+                e.preventDefault();
+                if (selectedNodeId === 'node-client') {
+                    alert('중심 인물은 삭제할 수 없습니다.');
+                    return;
+                }
+                saveStateToHistory();
+                const indexToDelete = parseInt(selectedNodeId.split('-')[1]);
+                if (!isNaN(indexToDelete) && people[indexToDelete]) {
+                    people.splice(indexToDelete, 1);
+                    selectedNodeId = null;
+                    drawEcomap();
+                }
+            }
+        }
+
+        function handleAddPerson(e) {
+            e.preventDefault();
+            if (!client) { alert('먼저 중심 인물을 입력해주세요.'); return; }
+            saveStateToHistory();
+            const newPerson = {
+                name: document.getElementById('person-name').value,
+                relationship: document.getElementById('relationship-type').value,
+                direction: document.getElementById('direction-type').value
+            };
+            const angle = people.length * 0.9;
+            const svgRect = svg.getBoundingClientRect();
+            newPerson.x = svgRect.width / 2 + Math.cos(angle) * (svgRect.width / 4);
+            newPerson.y = svgRect.height / 2 + Math.sin(angle) * (svgRect.height / 4);
+            people.push(newPerson);
+            drawEcomap();
+            document.getElementById('add-person-form').reset();
+        }
+
+        function createClient(name) {
+            if (client) return;
+            saveStateToHistory();
+            const svgRect = svg.getBoundingClientRect();
+            client = { name, x: svgRect.width / 2, y: svgRect.height / 2 };
+        }
+
+        function handleUndo() {
+            if (history.length === 0) return;
+            const lastState = history.pop();
+            client = lastState.client;
+            people = lastState.people;
+            clientNameInput.value = client ? client.name : '';
+            selectedNodeId = null;
+            drawEcomap();
+        }
+
+        // --- 목록 관리 ---
+        function loadEcomapList() {
+            google.script.run.withSuccessHandler(renderEcomapList).getEcomapList();
+        }
+
+        function renderEcomapList(names) {
+            const container = document.getElementById('ecomap-list-container');
+            container.innerHTML = '';
+            if (!names || names.length === 0) {
+                container.innerHTML = '<p style="text-align:center; color: #777;">저장된 생태도가 없습니다.</p>';
+                return;
+            }
+            names.forEach((name, index) => {
+                const id = `ecomap-item-${index}`;
+                const item = document.createElement('div');
+                item.className = 'list-item';
+
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'ecomap-selection';
+                radio.id = id;
+                radio.dataset.name = name;
+                radio.style.marginRight = '10px';
+
+                const label = document.createElement('label');
+                label.htmlFor = id;
+                label.textContent = name;
+                label.className = 'list-item-name';
+
+                item.appendChild(radio);
+                item.appendChild(label);
+                container.appendChild(item);
+            });
+        }
+
+        function handleLoadSelected() {
+            const selectedRadio = document.querySelector('#ecomap-list-container input[type="radio"]:checked');
+            if (!selectedRadio) {
+                alert('불러올 항목을 선택해주세요.');
+                return;
+            }
+            const nameToLoad = selectedRadio.dataset.name;
+            loadEcomap(nameToLoad);
+        }
+
+        function loadEcomap(name) {
+            resetCanvas();
+            currentEcomapName = name;
+            ecomapTitleInput.value = name;
+            saveStatus.textContent = '불러오는 중...';
+            google.script.run
+                .withSuccessHandler(data => {
+                    if (data && data.client) {
+                        client = data.client;
+                        people = data.people || [];
+                        clientNameInput.value = client.name;
+                        history = [];
+                        drawEcomap();
+                        saveStatus.textContent = '불러오기 완료';
+                        setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+                    } else { saveStatus.textContent = '데이터를 불러오는 데 실패했습니다.'; }
+                })
+                .withFailureHandler(() => { saveStatus.textContent = '불러오기 실패'; })
+                .loadEcomapData(name);
+        }
+
+        function handleDeleteSelected() {
+            const selectedRadio = document.querySelector('#ecomap-list-container input[type="radio"]:checked');
+            if (!selectedRadio) {
+                alert('삭제할 항목을 선택해주세요.');
+                return;
+            }
+            const nameToDelete = selectedRadio.dataset.name;
+            if (confirm(`'${nameToDelete}' 생태도를 정말 삭제하시겠습니까?`)) {
+                google.script.run.withSuccessHandler(() => {
+                    loadEcomapList();
+                    if (nameToDelete === currentEcomapName) {
+                        resetCanvas();
+                    }
+                }).deleteEcomaps([nameToDelete]);
+            }
+        }
+
+        // --- 드래그 앤 드롭 로직 ---
+        function startDrag(e) {
+            const targetNode = e.target.closest('.node');
+            if (targetNode) {
+                selectedElement = targetNode;
+                setTimeout(() => { if (selectedElement) isDragging = true; }, 150);
+                const CTM = svg.getScreenCTM();
+                offset = {
+                    x: (e.clientX - CTM.e) / CTM.a - parseFloat(selectedElement.getAttribute('data-x')),
+                    y: (e.clientY - CTM.f) / CTM.d - parseFloat(selectedElement.getAttribute('data-y'))
+                };
+            }
+        }
+
+        function drag(e) {
+            if (isDragging && selectedElement) {
+                e.preventDefault();
+                const coord = { x: (e.clientX - svg.getScreenCTM().e) / svg.getScreenCTM().a, y: (e.clientY - svg.getScreenCTM().f) / svg.getScreenCTM().d };
+                const newX = coord.x - offset.x, newY = coord.y - offset.y;
+                const id = selectedElement.id;
+                if (id === 'node-client') { client.x = newX; client.y = newY; }
+                else { const index = parseInt(id.split('-')[1]); people[index].x = newX; people[index].y = newY; }
+                drawEcomap();
+            }
+        }
+
+        function endDrag(e) {
+            setTimeout(() => { isDragging = false; }, 0);
+            selectedElement = null;
+        }
+
+        // --- 렌더링 ---
+        function resetCanvas() {
+            svg.innerHTML = ''; createMarkers();
+            client = null; people = []; history = []; currentEcomapName = '';
+            selectedNodeId = null;
+            ecomapTitleInput.value = ''; clientNameInput.value = '';
+            saveStatus.textContent = '';
+            // 목록에서 선택된 라디오 버튼도 해제
+            const selectedRadio = document.querySelector('#ecomap-list-container input[type="radio"]:checked');
+            if (selectedRadio) {
+                selectedRadio.checked = false;
+            }
+        }
+
+        function drawEcomap() {
+            svg.innerHTML = ''; createMarkers();
+            if (!client) return;
+            people.forEach((p, i) => svg.appendChild(createLink(client, p, `link-${i}`)));
+            const clientNode = createNode(client, 'client', 'node-client');
+            svg.appendChild(clientNode);
+            people.forEach((p, i) => {
+                const personNode = createNode(p, 'person', `node-${i}`);
+                svg.appendChild(personNode);
+            });
+        }
+
+        function createNode(data, type, id) {
+            const group = document.createElementNS(svgNS, 'g');
+            group.setAttribute('class', `node ${type}`);
+            group.setAttribute('id', id);
+            if (id === selectedNodeId) { group.classList.add('selected'); }
+            group.setAttribute('transform', `translate(${data.x}, ${data.y})`);
+            group.setAttribute('data-x', data.x); group.setAttribute('data-y', data.y);
+            const circle = document.createElementNS(svgNS, 'circle');
+            circle.setAttribute('r', NODE_RADIUS);
+            const text = document.createElementNS(svgNS, 'text');
+            text.setAttribute('y', 5); text.textContent = data.name;
+            group.appendChild(circle); group.appendChild(text);
+            return group;
+        }
+
+        function createLink(source, target, id) {
+            const path = document.createElementNS(svgNS, 'path');
+            path.setAttribute('id', id);
+            path.setAttribute('class', `link ${target.relationship}`);
+            const dx = target.x - source.x, dy = target.y - source.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const markerPadding = 5;
+            const startX = source.x + (dx * (NODE_RADIUS + markerPadding)) / distance;
+            const startY = source.y + (dy * (NODE_RADIUS + markerPadding)) / distance;
+            const endX = target.x - (dx * (NODE_RADIUS + markerPadding)) / distance;
+            const endY = target.y - (dy * (NODE_RADIUS + markerPadding)) / distance;
+            path.setAttribute('d', target.relationship === 'conflict' ? createZigzagPath(startX, startY, endX, endY) : `M ${startX},${startY} L ${endX},${endY}`);
+            if (target.direction === 'from' || target.direction === 'both') path.setAttribute('marker-end', 'url(#arrowhead-end)');
+            if (target.direction === 'to' || target.direction === 'both') path.setAttribute('marker-start', 'url(#arrowhead-start)');
+            return path;
+        }
+
+        function createZigzagPath(x1, y1, x2, y2) {
+            const distance = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+            const segments = Math.max(4, Math.floor(distance / 20));
+            const amplitude = 8;
+            let path = `M ${x1},${y1}`;
+            const dx = (x2 - x1) / segments;
+            const dy = (y2 - y1) / segments;
+            const perpDx = -dy; const perpDy = dx;
+            for (let i = 1; i <= segments; i++) {
+                const midX = x1 + dx * (i - 0.5);
+                const midY = y1 + dy * (i - 0.5);
+                const normPerp = Math.sqrt(perpDx * perpDx + perpDy * perpDy);
+                const peakX = midX + (amplitude * perpDx / normPerp) * (i % 2 === 0 ? 1 : -1);
+                const peakY = midY + (amplitude * perpDy / normPerp) * (i % 2 === 0 ? 1 : -1);
+                const endSegX = x1 + dx * i;
+                const endSegY = y1 + dy * i;
+                path += ` L ${peakX},${peakY} L ${endSegX},${endSegY}`;
+            }
+            return path;
+        }
+
+        function handleDownload(format) {
+            const cssStyles = Array.from(document.styleSheets).map(sheet => {
+                try { return Array.from(sheet.cssRules).map(rule => rule.cssText).join(' '); }
+                catch (e) { return ''; }
+            }).join(' ');
+            const svgClone = svg.cloneNode(true);
+            const styleElement = document.createElement('style');
+            styleElement.textContent = cssStyles;
+            svgClone.insertBefore(styleElement, svgClone.firstChild);
+            const svgString = new XMLSerializer().serializeToString(svgClone);
+            const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(svgBlob);
+            const img = new Image();
+            img.onload = function () {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const svgRect = svg.getBoundingClientRect();
+                const scale = 2;
+                canvas.width = svgRect.width * scale; canvas.height = svgRect.height * scale;
+                if (format === 'jpeg') { ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+                const imageType = `image/${format}`;
+                const imageUrl = canvas.toDataURL(imageType, format === 'jpeg' ? 0.9 : 1.0);
+                const link = document.createElement('a');
+                const title = ecomapTitleInput.value || 'ecomap';
+                link.download = `${title}.${format}`;
+                link.href = imageUrl;
+                link.click();
+            };
+            img.onerror = function () { alert("이미지를 로드하는 데 실패했습니다."); URL.revokeObjectURL(url); }
+            img.src = url;
+        }
+
+        // 앱 실행
+        initialize();
+    });
+</script>
